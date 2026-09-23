@@ -21,6 +21,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // --- ACCOUNTS (Email credential authentication store) ---
+    match /accounts/{accountId} {
+      allow get, list, create, update: if true;
+      allow delete: if false;
+    }
+
     // --- USERNAMES (Unique handle lookup) ---
     match /usernames/{username} {
       allow get, list, create, update, delete: if true;

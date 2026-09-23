@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -44,7 +44,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (uid: string, fallbackUser?: AppUser | null) => {
+  const fetchProfile = useCallback(async (uid: string, fallbackUser?: AppUser | null) => {
     try {
       const profile = await userService.getUserProfile(uid);
       if (profile) {
@@ -76,48 +76,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } as UserProfile);
       }
     }
-  };
+  }, [currentUser]);
+
+  const syncAuthState = useCallback(async () => {
+    if (auth.currentUser) {
+      const fbUser = auth.currentUser;
+      localStorage.removeItem(INSTANT_SESSION_KEY);
+      const userObj: AppUser = {
+        uid: fbUser.uid,
+        email: fbUser.email,
+        displayName: fbUser.displayName,
+        photoURL: fbUser.photoURL,
+        emailVerified: fbUser.emailVerified,
+        isInstantSession: false,
+      };
+      setCurrentUser(userObj);
+      await fetchProfile(fbUser.uid, userObj);
+      setLoading(false);
+      return;
+    }
+
+    const stored = localStorage.getItem(INSTANT_SESSION_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        setCurrentUser(parsed);
+        await fetchProfile(parsed.uid, parsed);
+      } catch (e) {
+        console.warn('Invalid stored session:', e);
+        localStorage.removeItem(INSTANT_SESSION_KEY);
+        setCurrentUser(null);
+        setUserProfile(null);
+      }
+    } else {
+      setCurrentUser(null);
+      setUserProfile(null);
+    }
+    setLoading(false);
+  }, [fetchProfile]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Firebase user logged in
-        localStorage.removeItem(INSTANT_SESSION_KEY);
-        const userObj: AppUser = {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          displayName: firebaseUser.displayName,
-          photoURL: firebaseUser.photoURL,
-          emailVerified: firebaseUser.emailVerified,
-          isInstantSession: false,
-        };
-        setCurrentUser(userObj);
-        await fetchProfile(firebaseUser.uid, userObj);
-        setLoading(false);
-      } else {
-        // Check if there is an active instant session in localStorage
-        const stored = localStorage.getItem(INSTANT_SESSION_KEY);
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            setCurrentUser(parsed);
-            await fetchProfile(parsed.uid, parsed);
-          } catch (e) {
-            console.warn('Invalid stored session:', e);
-            localStorage.removeItem(INSTANT_SESSION_KEY);
-            setCurrentUser(null);
-            setUserProfile(null);
-          }
-        } else {
-          setCurrentUser(null);
-          setUserProfile(null);
-        }
-        setLoading(false);
-      }
+    const unsubscribe = onAuthStateChanged(auth, () => {
+      syncAuthState();
     });
 
-    return () => unsubscribe();
-  }, []);
+    const handleCustomAuthChange = () => {
+      syncAuthState();
+    };
+
+    window.addEventListener('taskflow-auth-changed', handleCustomAuthChange);
+
+    // Initial check
+    syncAuthState();
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('taskflow-auth-changed', handleCustomAuthChange);
+    };
+  }, [syncAuthState]);
 
   const loginWithInstantSession = async (data: {
     email: string;
@@ -125,9 +141,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     username?: string;
   }) => {
     const cleanEmail = data.email.trim().toLowerCase();
-    // Generate stable deterministic or unique UID for this user
     const hash = cleanEmail.split('@')[0].replace(/[^a-zA-Z0-9]/g, '_');
-    const uid = `user_${hash}_${Date.now().toString(36).slice(-4)}`;
+    const uid = `usr_${hash}_${Date.now().toString(36).slice(-4)}`;
 
     const userObj: AppUser = {
       uid,
@@ -141,7 +156,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(INSTANT_SESSION_KEY, JSON.stringify(userObj));
     setCurrentUser(userObj);
 
-    // Save profile and claim username in Firestore
     try {
       const userRef = doc(db, 'users', uid);
       await setDoc(
@@ -164,7 +178,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await fetchProfile(uid, userObj);
     } catch (err) {
-      console.warn('Could not sync instant user to Firestore:', err);
+      console.warn('Could not sync user to Firestore:', err);
     }
   };
 

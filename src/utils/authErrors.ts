@@ -10,14 +10,29 @@ export function getFriendlyAuthErrorMessage(err: any): FriendlyAuthError {
   const rawMsg = err?.message || '';
 
   if (
+    code === 'auth/unauthorized-domain' ||
+    rawMsg.includes('unauthorized-domain') ||
+    rawMsg.includes('UNAUTHORIZED_DOMAIN')
+  ) {
+    const hostname =
+      typeof window !== 'undefined' && window.location ? window.location.hostname : 'this domain';
+    return {
+      title: 'Google Sign-In Domain Authorization',
+      message: `Google Sign-In on "${hostname}" requires adding "${hostname}" to your Firebase Console under Authentication > Settings > Authorized domains. In the meantime, you can easily create an account or sign in with your email & password below.`,
+      isOperationNotAllowed: false,
+      code,
+    };
+  }
+
+  if (
     code === 'auth/operation-not-allowed' ||
     rawMsg.includes('operation-not-allowed') ||
     rawMsg.includes('OPERATION_NOT_ALLOWED')
   ) {
     return {
-      title: 'Sign-in Assistance',
+      title: 'Sign-in Provider Notice',
       message:
-        'Standard email/password sign-in is momentarily unavailable. You can use Google Sign-In or continue with one-click Instant Access below.',
+        'Email/Password sign-in provider is being configured. Please try submitting again, or sign in with Google.',
       isOperationNotAllowed: true,
       code,
     };
