@@ -1,0 +1,6 @@
+{
+  "name": "TaskFlow",
+  "description": "Personal task and productivity management app with daily task lists, circular progress tracking, Kanban boards, and calendar scheduling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,182 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile representation in TaskFlow",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "displayName": { "type": "string", "maxLength": 100, "description": "Full display name" },
+        "photoURL": { "type": "string", "maxLength": 2048, "description": "Profile picture URL or avatar data" },
+        "bio": { "type": "string", "maxLength": 500, "description": "Short user bio" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["id", "email", "displayName"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "Collaborative workspace for tasks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Team ID" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100, "description": "Team workspace name" },
+        "description": { "type": "string", "maxLength": 500, "description": "Team workspace description" },
+        "ownerId": { "type": "string", "description": "UID of team owner" },
+        "memberIds": { "type": "array", "description": "List of user UIDs belonging to this team" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["id", "name", "ownerId", "memberIds"]
+    },
+    "TeamMember": {
+      "title": "TeamMember",
+      "description": "Membership association between a user and a team",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Composite key {teamId}_{userId}" },
+        "teamId": { "type": "string", "description": "Associated team ID" },
+        "userId": { "type": "string", "description": "Associated user UID" },
+        "userEmail": { "type": "string", "format": "email", "description": "User email" },
+        "userDisplayName": { "type": "string", "maxLength": 100, "description": "User display name" },
+        "userPhotoURL": { "type": "string", "maxLength": 2048, "description": "User avatar" },
+        "role": { "type": "string", "enum": ["OWNER", "ADMIN", "MEMBER"], "description": "Team role" },
+        "joinedAt": { "type": "string", "format": "date-time", "description": "Join timestamp" }
+      },
+      "required": ["id", "teamId", "userId", "userEmail", "role"]
+    },
+    "TeamInvitation": {
+      "title": "TeamInvitation",
+      "description": "Pending or resolved team invitations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique invitation ID" },
+        "teamId": { "type": "string", "description": "Target team ID" },
+        "teamName": { "type": "string", "maxLength": 100, "description": "Target team name" },
+        "inviterId": { "type": "string", "description": "UID of inviter" },
+        "inviterName": { "type": "string", "maxLength": 100, "description": "Name of inviter" },
+        "inviteeEmail": { "type": "string", "format": "email", "description": "Email of recipient" },
+        "role": { "type": "string", "enum": ["ADMIN", "MEMBER"], "description": "Proposed role" },
+        "status": { "type": "string", "enum": ["PENDING", "ACCEPTED", "REJECTED"], "description": "Invitation status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["id", "teamId", "teamName", "inviterId", "inviteeEmail", "role", "status"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Task items organized by status and priority",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Task ID" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Task title" },
+        "description": { "type": "string", "maxLength": 4000, "description": "Task description" },
+        "status": { "type": "string", "enum": ["TODO", "IN_PROGRESS", "REVIEW", "COMPLETED"], "description": "Task workflow status" },
+        "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"], "description": "Task urgency priority" },
+        "teamId": { "type": "string", "description": "Team ID the task belongs to" },
+        "teamName": { "type": "string", "maxLength": 100, "description": "Name of team workspace if shared" },
+        "isPrivate": { "type": "boolean", "description": "Whether the task is private to the user" },
+        "phase": { "type": "string", "maxLength": 100, "description": "Phase of the task (e.g. Phase 1: Planning)" },
+        "creatorId": { "type": "string", "description": "UID of task author" },
+        "creatorName": { "type": "string", "maxLength": 100, "description": "Name of task author" },
+        "creatorEmail": { "type": "string", "format": "email", "description": "Email of task author" },
+        "assigneeId": { "type": "string", "description": "UID of assigned user or empty" },
+        "assigneeName": { "type": "string", "maxLength": 100, "description": "Name of assigned user" },
+        "assigneeEmail": { "type": "string", "description": "Email of assigned user" },
+        "dueDate": { "type": "string", "description": "ISO date string or timestamp" },
+        "labels": { "type": "array", "description": "Array of string labels" },
+        "attachments": { "type": "array", "description": "File attachment metadata" },
+        "completedAt": { "type": "string", "description": "Timestamp when completed or null" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["id", "title", "status", "priority", "teamId", "creatorId"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment on a task",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique comment ID" },
+        "taskId": { "type": "string", "description": "Parent task ID" },
+        "teamId": { "type": "string", "description": "Team ID context" },
+        "authorId": { "type": "string", "description": "UID of commenter" },
+        "authorName": { "type": "string", "maxLength": 100, "description": "Commenter display name" },
+        "authorPhotoURL": { "type": "string", "maxLength": 2048, "description": "Commenter avatar" },
+        "content": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "Comment body" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["id", "taskId", "teamId", "authorId", "authorName", "content"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User in-app notifications",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique notification ID" },
+        "userId": { "type": "string", "description": "Target recipient UID" },
+        "title": { "type": "string", "maxLength": 150, "description": "Notification heading" },
+        "message": { "type": "string", "maxLength": 500, "description": "Notification details" },
+        "type": { "type": "string", "enum": ["TEAM_INVITE", "TASK_ASSIGNED", "TASK_UPDATED", "COMMENT_ADDED", "TEAM_JOINED"], "description": "Category" },
+        "read": { "type": "boolean", "description": "Read status" },
+        "link": { "type": "string", "maxLength": 500, "description": "Navigation link" },
+        "metadata": { "type": "object", "description": "Associated metadata IDs" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "userId", "title", "message", "type", "read"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Audit and activity log entries for teams",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique activity ID" },
+        "teamId": { "type": "string", "description": "Target team ID" },
+        "taskId": { "type": "string", "description": "Target task ID if applicable" },
+        "userId": { "type": "string", "description": "Actor user UID" },
+        "userName": { "type": "string", "maxLength": 100, "description": "Actor name" },
+        "userPhotoURL": { "type": "string", "maxLength": 2048, "description": "Actor avatar" },
+        "action": { "type": "string", "enum": ["TASK_CREATED", "TASK_ASSIGNED", "STATUS_CHANGED", "PRIORITY_CHANGED", "TASK_COMPLETED", "MEMBER_JOINED", "MEMBER_REMOVED", "COMMENT_ADDED"], "description": "Action type" },
+        "details": { "type": "string", "maxLength": 500, "description": "Human-readable description of event" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "teamId", "userId", "userName", "action", "details"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles keyed by Firebase Auth UID"
+    },
+    "/teams/{teamId}": {
+      "schema": "Team",
+      "description": "Team workspaces with member references"
+    },
+    "/teamMembers/{teamMemberId}": {
+      "schema": "TeamMember",
+      "description": "Team membership records keyed by composite teamId_userId"
+    },
+    "/teamInvitations/{invitationId}": {
+      "schema": "TeamInvitation",
+      "description": "Team invitations sent to user emails"
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Task items partitioned by teamId"
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments attached to tasks"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User-private notifications keyed by recipient UID"
+    },
+    "/activity/{activityId}": {
+      "schema": "Activity",
+      "description": "Team audit and activity logs"
+    }
+  }
+}

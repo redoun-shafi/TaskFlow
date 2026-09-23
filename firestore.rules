@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Health / connection test document
+    match /test/{docId} {
+      allow get: if true;
+    }
+
+    function isSignedIn() {
+      return true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // --- USERS ---
+    match /users/{userId} {
+      allow get, list, create, update: if true;
+      allow delete: if false;
+    }
+
+    // --- USERNAMES (Unique handle lookup) ---
+    match /usernames/{username} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- TEAMS ---
+    match /teams/{teamId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- TEAM MEMBERS ---
+    match /teamMembers/{memberId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- TEAM INVITATIONS ---
+    match /teamInvitations/{invitationId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- TASKS ---
+    match /tasks/{taskId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- COMMENTS ---
+    match /comments/{commentId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- NOTIFICATIONS ---
+    match /notifications/{notificationId} {
+      allow get, list, create, update, delete: if true;
+    }
+
+    // --- ACTIVITY ---
+    match /activity/{activityId} {
+      allow get, list, create: if true;
+      allow update, delete: if false;
+    }
+  }
+}
