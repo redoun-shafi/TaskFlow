@@ -260,6 +260,11 @@ export const authService = {
     }
   },
 
+  async sendEmailVerification(): Promise<void> {
+    // In free local mode, email is automatically verified on account creation
+    return Promise.resolve();
+  },
+
   async updatePassword(newPass: string): Promise<void> {
     const user = this.getCurrentUser();
     if (!user) throw new Error('No user is currently signed in.');
