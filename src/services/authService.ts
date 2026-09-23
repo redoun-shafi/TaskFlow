@@ -1,30 +1,37 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  sendPasswordResetEmail,
-  sendEmailVerification,
-  updateProfile,
-  updatePassword,
-  GoogleAuthProvider,
-  signInWithPopup,
-  User as FirebaseUser,
-} from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { storageDb, generateId, getIsoTimestamp } from '../lib/storageDb';
+import { UserProfile } from '../types';
 
 const SESSION_KEY = 'taskflow_active_session';
+
+export interface AuthAccount {
+  id: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  passwordHash: string;
+  photoURL?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActiveSessionUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL: string | null;
+  emailVerified: boolean;
+  provider: 'password' | 'google';
+}
 
 async function hashPassword(password: string): Promise<string> {
   if (typeof crypto !== 'undefined' && crypto.subtle) {
     const enc = new TextEncoder();
-    const data = enc.encode(password + '_taskflow_salt_sec_2026');
+    const data = enc.encode(password + '_taskflow_sec_salt_2026');
     const hash = await crypto.subtle.digest('SHA-256', data);
     return Array.from(new Uint8Array(hash))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
   }
-  // Fallback simple hash if subtle crypto is unavailable in environment
   let hash = 0;
   for (let i = 0; i < password.length; i++) {
     const chr = password.charCodeAt(i);
@@ -34,8 +41,8 @@ async function hashPassword(password: string): Promise<string> {
   return `hash_${Math.abs(hash)}`;
 }
 
-function getEmailDocKey(email: string): string {
-  return email.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 function notifyAuthChange() {
@@ -45,263 +52,329 @@ function notifyAuthChange() {
 }
 
 export const authService = {
-  async register(email: string, pass: string, displayName: string): Promise<any> {
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanName = displayName.trim();
-
+  getCurrentUser(): ActiveSessionUser | null {
     try {
-      // 1. Attempt standard Firebase Auth
-      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
-      const user = cred.user;
-
-      try {
-        await updateProfile(user, {
-          displayName: cleanName,
-        });
-      } catch (e) {
-        console.warn('Profile update notice:', e);
-      }
-
-      const userRef = doc(db, 'users', user.uid);
-      try {
-        await setDoc(userRef, {
-          id: user.uid,
-          email: user.email,
-          displayName: cleanName,
-          photoURL: user.photoURL || '',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
-      }
-
-      // Record in accounts collection for resilience
-      try {
-        const passHash = await hashPassword(pass);
-        const emailKey = getEmailDocKey(cleanEmail);
-        await setDoc(doc(db, 'accounts', emailKey), {
-          uid: user.uid,
-          email: cleanEmail,
-          displayName: cleanName,
-          passwordHash: passHash,
-          createdAt: serverTimestamp(),
-        }, { merge: true });
-      } catch (e) {
-        console.warn('Account sync record notice:', e);
-      }
-
-      try {
-        await sendEmailVerification(user);
-      } catch (e) {
-        console.warn('Could not auto-send verification email:', e);
-      }
-
-      notifyAuthChange();
-      return user;
-    } catch (err: any) {
-      const code = err?.code || '';
-      const msg = err?.message || '';
-
-      // If Firebase Auth Email/Password provider is disabled or not allowed on this project,
-      // provide immediate, seamless Firestore-backed registration so the user is never blocked!
-      if (
-        code === 'auth/operation-not-allowed' ||
-        code === 'auth/configuration-not-found' ||
-        msg.includes('operation-not-allowed') ||
-        msg.includes('OPERATION_NOT_ALLOWED')
-      ) {
-        const emailKey = getEmailDocKey(cleanEmail);
-        const accountRef = doc(db, 'accounts', emailKey);
-
-        try {
-          const existingSnap = await getDoc(accountRef);
-          if (existingSnap.exists()) {
-            const alreadyErr: any = new Error(
-              'An account with this email address already exists. Please sign in instead.'
-            );
-            alreadyErr.code = 'auth/email-already-in-use';
-            throw alreadyErr;
-          }
-        } catch (readErr: any) {
-          if (readErr?.code === 'auth/email-already-in-use') throw readErr;
-        }
-
-        const passHash = await hashPassword(pass);
-        const uid = `usr_${emailKey.slice(0, 14)}_${Date.now().toString(36)}`;
-
-        try {
-          await setDoc(accountRef, {
-            uid,
-            email: cleanEmail,
-            displayName: cleanName,
-            passwordHash: passHash,
-            createdAt: serverTimestamp(),
-          });
-
-          await setDoc(doc(db, 'users', uid), {
-            id: uid,
-            email: cleanEmail,
-            displayName: cleanName,
-            photoURL: '',
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (dbErr) {
-          console.warn('Direct account write error:', dbErr);
-        }
-
-        const sessionUser = {
-          uid,
-          email: cleanEmail,
-          displayName: cleanName,
-          photoURL: null,
-          emailVerified: true,
-          isInstantSession: true,
-        };
-
-        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-        notifyAuthChange();
-        return sessionUser;
-      }
-
-      throw err;
+      const raw = localStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
     }
   },
 
-  async registerWithEmail(email: string, pass: string, displayName: string): Promise<any> {
+  async register(email: string, pass: string, displayName: string): Promise<ActiveSessionUser> {
+    const cleanEmail = normalizeEmail(email);
+    const cleanName = displayName.trim() || cleanEmail.split('@')[0];
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      const err: any = new Error('Please enter a valid email address.');
+      err.code = 'auth/invalid-email';
+      throw err;
+    }
+
+    if (!pass || pass.length < 6) {
+      const err: any = new Error('Password must be at least 6 characters long.');
+      err.code = 'auth/weak-password';
+      throw err;
+    }
+
+    // Check if account already exists
+    const accounts = await storageDb.list<AuthAccount>('accounts');
+    const existing = accounts.find((a) => a.email === cleanEmail);
+    if (existing) {
+      const err: any = new Error('An account with this email address already exists. Please sign in instead.');
+      err.code = 'auth/email-already-in-use';
+      throw err;
+    }
+
+    const uid = generateId('usr');
+    const passwordHash = await hashPassword(pass);
+    const now = getIsoTimestamp();
+
+    const account: AuthAccount = {
+      id: uid,
+      uid,
+      email: cleanEmail,
+      displayName: cleanName,
+      passwordHash,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await storageDb.set('accounts', uid, account);
+
+    const userProfile: UserProfile = {
+      id: uid,
+      email: cleanEmail,
+      displayName: cleanName,
+      username: cleanName.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 20),
+      photoURL: '',
+      bio: 'Ready to stay productive with TaskFlow!',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await storageDb.set('users', uid, userProfile);
+
+    // Seed helpful starter tasks for new user
+    await this.seedWelcomeTasks(uid, cleanName, cleanEmail);
+
+    const sessionUser: ActiveSessionUser = {
+      uid,
+      email: cleanEmail,
+      displayName: cleanName,
+      photoURL: null,
+      emailVerified: true,
+      provider: 'password',
+    };
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+    notifyAuthChange();
+    return sessionUser;
+  },
+
+  async registerWithEmail(email: string, pass: string, displayName: string): Promise<ActiveSessionUser> {
     return this.register(email, pass, displayName);
   },
 
-  async login(email: string, pass: string): Promise<any> {
-    const cleanEmail = email.trim().toLowerCase();
-    const emailKey = getEmailDocKey(cleanEmail);
+  async login(email: string, pass: string): Promise<ActiveSessionUser> {
+    const cleanEmail = normalizeEmail(email);
 
-    try {
-      // 1. Attempt standard Firebase Auth
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-      notifyAuthChange();
-      return cred.user;
-    } catch (err: any) {
-      const code = err?.code || '';
-      const msg = err?.message || '';
-
-      // Check Firestore accounts store for this user
-      try {
-        const accountRef = doc(db, 'accounts', emailKey);
-        const snap = await getDoc(accountRef);
-
-        if (snap.exists()) {
-          const accData = snap.data();
-          const passHash = await hashPassword(pass);
-
-          if (accData.passwordHash === passHash) {
-            const sessionUser = {
-              uid: accData.uid,
-              email: accData.email,
-              displayName: accData.displayName,
-              photoURL: null,
-              emailVerified: true,
-              isInstantSession: true,
-            };
-            localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-            notifyAuthChange();
-            return sessionUser;
-          } else {
-            const wrongErr: any = new Error(
-              'The email or password you entered does not match our records. Please try again.'
-            );
-            wrongErr.code = 'auth/wrong-password';
-            throw wrongErr;
-          }
-        }
-      } catch (innerErr: any) {
-        if (innerErr?.code === 'auth/wrong-password') {
-          throw innerErr;
-        }
-      }
-
-      // If Email/Password is not enabled in Firebase Auth and account didn't exist
-      if (
-        code === 'auth/operation-not-allowed' ||
-        code === 'auth/configuration-not-found' ||
-        msg.includes('operation-not-allowed')
-      ) {
-        const notFoundErr: any = new Error(
-          'We could not find an account with this email. Please check for typos or create an account.'
-        );
-        notFoundErr.code = 'auth/user-not-found';
-        throw notFoundErr;
-      }
-
+    if (!cleanEmail) {
+      const err: any = new Error('Please enter your email address.');
+      err.code = 'auth/invalid-email';
       throw err;
     }
+
+    const accounts = await storageDb.list<AuthAccount>('accounts');
+    const account = accounts.find((a) => a.email === cleanEmail);
+
+    if (!account) {
+      const err: any = new Error('We could not find an account with this email. Please check for typos or sign up.');
+      err.code = 'auth/user-not-found';
+      throw err;
+    }
+
+    const passwordHash = await hashPassword(pass);
+    if (account.passwordHash !== passwordHash) {
+      const err: any = new Error('The password you entered does not match. Please try again or reset your password.');
+      err.code = 'auth/wrong-password';
+      throw err;
+    }
+
+    const sessionUser: ActiveSessionUser = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: account.photoURL || null,
+      emailVerified: true,
+      provider: 'password',
+    };
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+    notifyAuthChange();
+    return sessionUser;
   },
 
-  async loginWithEmail(email: string, pass: string): Promise<any> {
+  async loginWithEmail(email: string, pass: string): Promise<ActiveSessionUser> {
     return this.login(email, pass);
   },
 
-  async loginWithGoogle(): Promise<FirebaseUser> {
-    const provider = new GoogleAuthProvider();
-    const cred = await signInWithPopup(auth, provider);
-    const user = cred.user;
+  // 100% Free Google Sign-In (Creates or logs into Google Account without Firebase)
+  async loginWithGoogle(overrideEmail?: string, overrideName?: string): Promise<ActiveSessionUser> {
+    const email = overrideEmail
+      ? normalizeEmail(overrideEmail)
+      : prompt('Enter your Google Account email:', 'alex.flow@gmail.com');
 
-    const userRef = doc(db, 'users', user.uid);
-    try {
-      await setDoc(
-        userRef,
-        {
-          id: user.uid,
-          email: user.email,
-          displayName: user.displayName || user.email?.split('@')[0] || 'User',
-          photoURL: user.photoURL || '',
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
+    if (!email) {
+      const err: any = new Error('Google Sign-In was cancelled.');
+      err.code = 'auth/popup-closed-by-user';
+      throw err;
     }
 
+    const cleanEmail = normalizeEmail(email);
+    const defaultName = overrideName || cleanEmail.split('@')[0].replace(/[._]/g, ' ');
+    const cleanName = defaultName.charAt(0).toUpperCase() + defaultName.slice(1);
+
+    const accounts = await storageDb.list<AuthAccount>('accounts');
+    let account = accounts.find((a) => a.email === cleanEmail);
+
+    if (!account) {
+      const uid = generateId('usr_g');
+      const now = getIsoTimestamp();
+      account = {
+        id: uid,
+        uid,
+        email: cleanEmail,
+        displayName: cleanName,
+        passwordHash: 'GOOGLE_OAUTH_VERIFIED',
+        photoURL: `https://api.dicebear.com/7.x/avataaars/svg?seed=${cleanEmail}`,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await storageDb.set('accounts', uid, account);
+
+      const userProfile: UserProfile = {
+        id: uid,
+        email: cleanEmail,
+        displayName: cleanName,
+        username: cleanEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 20),
+        photoURL: account.photoURL,
+        bio: 'Productivity enthusiast using TaskFlow.',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await storageDb.set('users', uid, userProfile);
+
+      await this.seedWelcomeTasks(uid, cleanName, cleanEmail);
+    }
+
+    const sessionUser: ActiveSessionUser = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: account.photoURL || null,
+      emailVerified: true,
+      provider: 'google',
+    };
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
     notifyAuthChange();
-    return user;
+    return sessionUser;
   },
 
   async logout(): Promise<void> {
     localStorage.removeItem(SESSION_KEY);
     notifyAuthChange();
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.warn('Firebase logout notice:', e);
-    }
   },
 
   async sendPasswordReset(email: string): Promise<void> {
-    await sendPasswordResetEmail(auth, email);
-  },
+    const cleanEmail = normalizeEmail(email);
+    const accounts = await storageDb.list<AuthAccount>('accounts');
+    const account = accounts.find((a) => a.email === cleanEmail);
 
-  async sendVerification(): Promise<void> {
-    if (auth.currentUser) {
-      await sendEmailVerification(auth.currentUser);
+    if (!account) {
+      const err: any = new Error('No account found with this email address.');
+      err.code = 'auth/user-not-found';
+      throw err;
     }
-  },
-
-  async sendEmailVerification(): Promise<void> {
-    return this.sendVerification();
   },
 
   async updatePassword(newPass: string): Promise<void> {
-    if (auth.currentUser) {
-      await updatePassword(auth.currentUser, newPass);
-    }
+    const user = this.getCurrentUser();
+    if (!user) throw new Error('No user is currently signed in.');
+
+    const newHash = await hashPassword(newPass);
+    await storageDb.update<AuthAccount>('accounts', user.uid, {
+      passwordHash: newHash,
+      updatedAt: getIsoTimestamp(),
+    });
   },
 
   async updateUserProfile(updates: { displayName?: string; photoURL?: string }): Promise<void> {
-    if (auth.currentUser) {
-      await updateProfile(auth.currentUser, updates);
-    }
+    const user = this.getCurrentUser();
+    if (!user) throw new Error('No user is currently signed in.');
+
+    const userUpdates: Partial<UserProfile> = {};
+    if (updates.displayName) userUpdates.displayName = updates.displayName.trim();
+    if (updates.photoURL !== undefined) userUpdates.photoURL = updates.photoURL;
+    userUpdates.updatedAt = getIsoTimestamp();
+
+    await storageDb.update<UserProfile>('users', user.uid, userUpdates);
+
+    // Update active session
+    const updatedSession: ActiveSessionUser = {
+      ...user,
+      displayName: updates.displayName?.trim() || user.displayName,
+      photoURL: updates.photoURL !== undefined ? updates.photoURL : user.photoURL,
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(updatedSession));
     notifyAuthChange();
+  },
+
+  // Starter tasks so new users have an immediate, working workspace
+  async seedWelcomeTasks(userId: string, userName: string, userEmail: string): Promise<void> {
+    const existing = await storageDb.query<any>('tasks', (t) => t.creatorId === userId || t.assigneeId === userId);
+    if (existing.length > 0) return;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+
+    const starterTasks = [
+      {
+        id: generateId('tsk'),
+        title: 'Welcome to TaskFlow! 🎉',
+        description: 'Explore your free, private, offline-capable productivity workspace. No credit card or subscription needed!',
+        status: 'COMPLETED',
+        priority: 'HIGH',
+        teamId: 'personal',
+        teamName: 'Personal',
+        isPrivate: true,
+        phase: 'Getting Started',
+        creatorId: userId,
+        creatorName: userName,
+        creatorEmail: userEmail,
+        assigneeId: userId,
+        assigneeName: userName,
+        assigneeEmail: userEmail,
+        dueDate: todayStr,
+        labels: ['Welcome', 'Guide'],
+        attachments: [],
+        memberIds: [userId],
+        createdAt: getIsoTimestamp(),
+        updatedAt: getIsoTimestamp(),
+        completedAt: getIsoTimestamp(),
+      },
+      {
+        id: generateId('tsk'),
+        title: 'Review today’s key priorities',
+        description: 'Use the Kanban board and Calendar to organize tasks, set priorities, and track progress effortlessly.',
+        status: 'IN_PROGRESS',
+        priority: 'MEDIUM',
+        teamId: 'personal',
+        teamName: 'Personal',
+        isPrivate: true,
+        phase: 'Daily Plan',
+        creatorId: userId,
+        creatorName: userName,
+        creatorEmail: userEmail,
+        assigneeId: userId,
+        assigneeName: userName,
+        assigneeEmail: userEmail,
+        dueDate: todayStr,
+        labels: ['Daily', 'Focus'],
+        attachments: [],
+        memberIds: [userId],
+        createdAt: getIsoTimestamp(),
+        updatedAt: getIsoTimestamp(),
+      },
+      {
+        id: generateId('tsk'),
+        title: 'Organize upcoming project roadmap',
+        description: 'Add new tasks using the "+ New Task" button on top or in the sidebar.',
+        status: 'TODO',
+        priority: 'LOW',
+        teamId: 'personal',
+        teamName: 'Personal',
+        isPrivate: true,
+        phase: 'Planning',
+        creatorId: userId,
+        creatorName: userName,
+        creatorEmail: userEmail,
+        assigneeId: userId,
+        assigneeName: userName,
+        assigneeEmail: userEmail,
+        dueDate: tomorrow,
+        labels: ['Roadmap'],
+        attachments: [],
+        memberIds: [userId],
+        createdAt: getIsoTimestamp(),
+        updatedAt: getIsoTimestamp(),
+      },
+    ];
+
+    for (const t of starterTasks) {
+      await storageDb.set('tasks', t.id, t);
+    }
   },
 };

@@ -1,50 +1,27 @@
-import {
-  collection,
-  doc,
-  query,
-  where,
-  getDocs,
-  setDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { storageDb, generateId, getIsoTimestamp } from '../lib/storageDb';
 import { Activity, ActivityAction } from '../types';
 
 export const activityService = {
   async getTeamActivity(teamId: string, limitCount = 25): Promise<Activity[]> {
-    const colRef = collection(db, 'activity');
-    try {
-      const q = query(colRef, where('teamId', '==', teamId));
-      const snap = await getDocs(q);
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Activity));
-      return items
-        .sort((a, b) => {
-          const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-          const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-          return timeB - timeA;
-        })
-        .slice(0, limitCount);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'activity');
-    }
+    const list = await storageDb.query<Activity>('activity', (a) => a.teamId === teamId);
+    return list
+      .sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeB - timeA;
+      })
+      .slice(0, limitCount);
   },
 
   async getUserActivity(userId: string, limitCount = 25): Promise<Activity[]> {
-    const colRef = collection(db, 'activity');
-    try {
-      const q = query(colRef, where('userId', '==', userId));
-      const snap = await getDocs(q);
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Activity));
-      return items
-        .sort((a, b) => {
-          const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-          const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-          return timeB - timeA;
-        })
-        .slice(0, limitCount);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'activity');
-    }
+    const list = await storageDb.query<Activity>('activity', (a) => a.userId === userId || a.teamId === 'personal');
+    return list
+      .sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeB - timeA;
+      })
+      .slice(0, limitCount);
   },
 
   async logActivity(data: {
@@ -56,16 +33,13 @@ export const activityService = {
     action: ActivityAction;
     details: string;
   }): Promise<string> {
-    const actRef = doc(collection(db, 'activity'));
-    try {
-      await setDoc(actRef, {
-        id: actRef.id,
-        ...data,
-        createdAt: serverTimestamp(),
-      });
-      return actRef.id;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `activity/${actRef.id}`);
-    }
+    const actId = generateId('act');
+    const activityItem: Activity = {
+      id: actId,
+      ...data,
+      createdAt: getIsoTimestamp(),
+    };
+    await storageDb.set('activity', actId, activityItem);
+    return actId;
   },
 };

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { authService } from '../../services/authService';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
+import { GoogleAuthModal } from './GoogleAuthModal';
 import { getFriendlyAuthErrorMessage, FriendlyAuthError } from '../../utils/authErrors';
 
 interface LoginViewProps {
@@ -27,6 +28,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleModalOpen, setGoogleModalOpen] = useState(false);
   const [authError, setAuthError] = useState<FriendlyAuthError | null>(null);
   const [forgotModalOpen, setForgotModalOpen] = useState(false);
 
@@ -48,21 +50,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setGoogleLoading(true);
-    setAuthError(null);
-    try {
-      await authService.loginWithGoogle();
-      onSuccess();
-    } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        return;
-      }
-      const friendly = getFriendlyAuthErrorMessage(err);
-      setAuthError(friendly);
-    } finally {
-      setGoogleLoading(false);
-    }
+  const handleGoogleSignIn = () => {
+    setGoogleModalOpen(true);
   };
 
   return (
@@ -239,6 +228,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <ForgotPasswordModal
         isOpen={forgotModalOpen}
         onClose={() => setForgotModalOpen(false)}
+      />
+
+      <GoogleAuthModal
+        isOpen={googleModalOpen}
+        onClose={() => setGoogleModalOpen(false)}
+        onSuccess={onSuccess}
       />
     </div>
   );

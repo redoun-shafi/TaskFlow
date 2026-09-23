@@ -14,6 +14,7 @@ import {
 import { authService } from '../../services/authService';
 import { userService } from '../../services/userService';
 import { getFriendlyAuthErrorMessage, FriendlyAuthError } from '../../utils/authErrors';
+import { GoogleAuthModal } from './GoogleAuthModal';
 
 interface RegisterViewProps {
   onSuccess: () => void;
@@ -34,23 +35,11 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleModalOpen, setGoogleModalOpen] = useState(false);
   const [authError, setAuthError] = useState<FriendlyAuthError | null>(null);
 
-  const handleGoogleSignIn = async () => {
-    setGoogleLoading(true);
-    setAuthError(null);
-    try {
-      await authService.loginWithGoogle();
-      onSuccess();
-    } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        return;
-      }
-      const friendly = getFriendlyAuthErrorMessage(err);
-      setAuthError(friendly);
-    } finally {
-      setGoogleLoading(false);
-    }
+  const handleGoogleSignIn = () => {
+    setGoogleModalOpen(true);
   };
 
   // Calculate Password Strength (0 to 100)
@@ -393,6 +382,12 @@ export const RegisterView: React.FC<RegisterViewProps> = ({
           </div>
         </div>
       </div>
+
+      <GoogleAuthModal
+        isOpen={googleModalOpen}
+        onClose={() => setGoogleModalOpen(false)}
+        onSuccess={onSuccess}
+      />
     </div>
   );
 };

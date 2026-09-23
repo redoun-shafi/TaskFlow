@@ -1,87 +1,37 @@
-import {
-  collection,
-  doc,
-  query,
-  where,
-  getDocs,
-  getDoc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { storageDb, generateId, getIsoTimestamp } from '../lib/storageDb';
 import { Task, TaskPriority, TaskStatus, Comment, TaskAttachment } from '../types';
 import { activityService } from './activityService';
 import { notificationService } from './notificationService';
 
 export const taskService = {
   async getTeamTasks(teamId: string): Promise<Task[]> {
-    const colRef = collection(db, 'tasks');
-    try {
-      const q = query(colRef, where('teamId', '==', teamId));
-      const snap = await getDocs(q);
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task));
-      return items.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-        return timeB - timeA;
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'tasks');
-    }
+    const tasks = await storageDb.query<Task>('tasks', (t) => t.teamId === teamId);
+    return tasks.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
   },
 
   async getUserTasks(userId: string): Promise<Task[]> {
-    const colRef = collection(db, 'tasks');
-    try {
-      const map = new Map<string, Task>();
+    const tasks = await storageDb.query<Task>(
+      'tasks',
+      (t) =>
+        t.assigneeId === userId ||
+        t.creatorId === userId ||
+        (t.memberIds && t.memberIds.includes(userId)) ||
+        t.teamId === 'personal'
+    );
 
-      try {
-        const qAssignee = query(colRef, where('assigneeId', '==', userId));
-        const snapAssignee = await getDocs(qAssignee);
-        snapAssignee.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Task));
-      } catch (e) {
-        console.warn('Assignee query note:', e);
-      }
-
-      try {
-        const qCreator = query(colRef, where('creatorId', '==', userId));
-        const snapCreator = await getDocs(qCreator);
-        snapCreator.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Task));
-      } catch (e) {
-        console.warn('Creator query note:', e);
-      }
-
-      try {
-        const qMembers = query(colRef, where('teamMemberIds', 'array-contains', userId));
-        const snapMembers = await getDocs(qMembers);
-        snapMembers.docs.forEach((d) => map.set(d.id, { id: d.id, ...d.data() } as Task));
-      } catch (e) {
-        console.warn('Members query note:', e);
-      }
-
-      return Array.from(map.values()).sort((a, b) => {
-        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-        return timeB - timeA;
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'tasks');
-    }
+    return tasks.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
   },
 
   async getTask(taskId: string): Promise<Task | null> {
-    const docRef = doc(db, 'tasks', taskId);
-    try {
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as Task;
-      }
-      return null;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `tasks/${taskId}`);
-    }
+    return storageDb.get<Task>('tasks', taskId);
   },
 
   async createTask(data: {
@@ -100,7 +50,9 @@ export const taskService = {
     attachments?: TaskAttachment[];
     teamMemberIds?: string[];
   }): Promise<Task> {
-    const taskRef = doc(collection(db, 'tasks'));
+    const taskId = generateId('tsk');
+    const now = getIsoTimestamp();
+
     const memberIds = Array.from(
       new Set([
         data.creator.uid,
@@ -110,7 +62,7 @@ export const taskService = {
     );
 
     const taskPayload: Task = {
-      id: taskRef.id,
+      id: taskId,
       title: data.title.trim(),
       description: data.description?.trim() || '',
       status: data.status,
@@ -129,22 +81,18 @@ export const taskService = {
       labels: data.labels || [],
       attachments: data.attachments || [],
       memberIds,
-      completedAt: data.status === 'COMPLETED' ? serverTimestamp() : null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      completedAt: data.status === 'COMPLETED' ? now : null,
+      createdAt: now,
+      updatedAt: now,
     };
 
-    try {
-      await setDoc(taskRef, taskPayload);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `tasks/${taskRef.id}`);
-    }
+    await storageDb.set('tasks', taskId, taskPayload);
 
     await activityService.logActivity({
       teamId: data.teamId,
-      taskId: taskRef.id,
+      taskId,
       userId: data.creator.uid,
-      userName: data.creator.displayName || 'Someone',
+      userName: data.creator.displayName || 'User',
       action: 'TASK_CREATED',
       details: `Created task "${data.title.trim()}"`,
     });
@@ -153,10 +101,10 @@ export const taskService = {
       await notificationService.sendNotification({
         userId: data.assignee.uid,
         title: 'Assigned to New Task',
-        message: `${data.creator.displayName || 'A team member'} assigned you to "${data.title.trim()}".`,
+        message: `${data.creator.displayName || 'Someone'} assigned you to "${data.title.trim()}".`,
         type: 'TASK_ASSIGNED',
-        link: `/tasks/${taskRef.id}`,
-        metadata: { taskId: taskRef.id, teamId: data.teamId },
+        link: `/tasks/${taskId}`,
+        metadata: { taskId, teamId: data.teamId },
       });
     }
 
@@ -169,27 +117,23 @@ export const taskService = {
     updates: Partial<Task>,
     actor: { uid: string; displayName: string | null; photoURL?: string | null }
   ): Promise<void> {
-    const docRef = doc(db, 'tasks', taskId);
+    const now = getIsoTimestamp();
     const updatedPayload: any = {
       ...updates,
-      updatedAt: serverTimestamp(),
+      updatedAt: now,
     };
 
     if (updates.status && updates.status !== existingTask.status) {
       if (updates.status === 'COMPLETED') {
-        updatedPayload.completedAt = serverTimestamp();
+        updatedPayload.completedAt = now;
       } else {
         updatedPayload.completedAt = null;
       }
     }
 
-    try {
-      await updateDoc(docRef, updatedPayload);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `tasks/${taskId}`);
-    }
+    await storageDb.update('tasks', taskId, updatedPayload);
 
-    // Log Activity & Dispatch notifications
+    // Activity log
     if (updates.status && updates.status !== existingTask.status) {
       await activityService.logActivity({
         teamId: existingTask.teamId,
@@ -244,12 +188,7 @@ export const taskService = {
   },
 
   async deleteTask(task: Task, actor: { uid: string; displayName: string | null }): Promise<void> {
-    const docRef = doc(db, 'tasks', task.id);
-    try {
-      await deleteDoc(docRef);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `tasks/${task.id}`);
-    }
+    await storageDb.delete('tasks', task.id);
 
     await activityService.logActivity({
       teamId: task.teamId,
@@ -261,19 +200,12 @@ export const taskService = {
   },
 
   async getTaskComments(taskId: string): Promise<Comment[]> {
-    const colRef = collection(db, 'comments');
-    try {
-      const q = query(colRef, where('taskId', '==', taskId));
-      const snap = await getDocs(q);
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Comment));
-      return items.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-        return timeA - timeB; // Chronological
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'comments');
-    }
+    const comments = await storageDb.query<Comment>('comments', (c) => c.taskId === taskId);
+    return comments.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeA - timeB;
+    });
   },
 
   async addComment(data: {
@@ -285,24 +217,22 @@ export const taskService = {
     taskAssigneeId?: string | null;
     taskCreatorId: string;
   }): Promise<Comment> {
-    const commentRef = doc(collection(db, 'comments'));
+    const commentId = generateId('cmt');
+    const now = getIsoTimestamp();
+
     const commentPayload: Comment = {
-      id: commentRef.id,
+      id: commentId,
       taskId: data.taskId,
       teamId: data.teamId,
       authorId: data.author.uid,
       authorName: data.author.displayName || 'User',
       authorPhotoURL: data.author.photoURL || '',
       content: data.content.trim(),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      createdAt: now,
+      updatedAt: now,
     };
 
-    try {
-      await setDoc(commentRef, commentPayload);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `comments/${commentRef.id}`);
-    }
+    await storageDb.set('comments', commentId, commentPayload);
 
     await activityService.logActivity({
       teamId: data.teamId,
@@ -314,7 +244,6 @@ export const taskService = {
       details: `Commented on "${data.taskTitle}"`,
     });
 
-    // Notify task assignee or creator if different from commenter
     const notifyTargets = new Set<string>();
     if (data.taskAssigneeId && data.taskAssigneeId !== data.author.uid) {
       notifyTargets.add(data.taskAssigneeId);
@@ -338,11 +267,6 @@ export const taskService = {
   },
 
   async deleteComment(commentId: string): Promise<void> {
-    const docRef = doc(db, 'comments', commentId);
-    try {
-      await deleteDoc(docRef);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `comments/${commentId}`);
-    }
+    await storageDb.delete('comments', commentId);
   },
 };

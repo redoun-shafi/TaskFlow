@@ -12,11 +12,16 @@ import {
   Eye,
   EyeOff,
   AtSign,
+  Download,
+  Upload,
+  Database,
+  Shield,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { userService } from '../../services/userService';
 import { authService } from '../../services/authService';
 import { storageService } from '../../services/storageService';
+import { storageDb } from '../../lib/storageDb';
 
 export const ProfileView: React.FC = () => {
   const { currentUser, userProfile, refreshUserProfile } = useAuth();
@@ -390,6 +395,78 @@ export const ProfileView: React.FC = () => {
             </button>
           </div>
         </form>
+      </div>
+
+      {/* Free Local Data Management & Backup */}
+      <div className="bg-white rounded-xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <Database className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Workspace Data & Backup</h3>
+              <p className="text-xs text-slate-500">
+                100% Free Forever • Zero Cloud Subscriptions • Stored Privately in Your Browser
+              </p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
+            <Shield className="w-3 h-3" /> Free & Private
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-600 leading-relaxed">
+          Your task workspace operates completely free without any third-party payment requirements, Firebase invoices, or cloud billing. You can export a full JSON backup of all your tasks, notes, and activity at any time, or import it to sync across devices.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <button
+            id="export-backup-btn"
+            type="button"
+            onClick={async () => {
+              try {
+                const dataStr = await storageDb.exportBackup();
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `taskflow-backup-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                console.error('Backup export error:', e);
+              }
+            }}
+            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            <span>Export Backup (.json)</span>
+          </button>
+
+          <label
+            htmlFor="import-backup-file"
+            className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+          >
+            <Upload className="w-4 h-4 text-slate-500" />
+            <span>Restore Backup</span>
+            <input
+              id="import-backup-file"
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const text = await file.text();
+                const ok = await storageDb.importBackup(text);
+                if (ok) {
+                  window.location.reload();
+                }
+              }}
+            />
+          </label>
+        </div>
       </div>
     </div>
   );
